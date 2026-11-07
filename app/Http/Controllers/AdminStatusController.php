@@ -11,56 +11,47 @@ use Illuminate\Validation\Rule;
 class AdminStatusController extends Controller
 {
     /** Pilihan status (sesuai enum di tabel admin_statuses). */
-    public const STATUS = [
-        'TERSEDIA'   => 'Tersedia',
-        'SIBUK'      => 'Sibuk',
-        'TUGAS_LUAR' => 'Tugas Luar',
-    ];
+    private const STATUS = ['TERSEDIA', 'SIBUK', 'TUGAS_LUAR'];
 
     /**
-     * Halaman status ketersediaan: status milik sendiri + status seluruh tim Humas.
+     * Halaman Status & Penugasan Admin (view: admin/status/index.blade.php).
+     *
+     * Variabel untuk view:
+     * - $currentStatus : status milik user yang login (status_ketersediaan, deskripsi_pekerjaan)
+     * - $allStatuses   : status seluruh Super Admin & Admin, masing-masing dengan relasi user
      */
     public function index()
     {
         $userId = Auth::id();
 
         // Semua akun Super Admin & Admin (tim Humas)
-        $admin = User::with(['karyawan.unit', 'peran'])
+        $admin = User::with(['karyawan.unit'])
             ->whereHas('peran', fn ($q) => $q->whereIn('kode_peran', ['SUPER_ADMIN', 'ADMIN']))
             ->orderBy('name')
             ->get();
 
-        // Status yang sudah tercatat, dikelompokkan per user
-        $statusPerUser = AdminStatus::whereIn('user_id', $admin->pluck('id'))
-            ->get()
-            ->keyBy('user_id');
+        // Status yang sudah tercatat
+        $tercatat = AdminStatus::whereIn('user_id', $admin->pluck('id'))->get()->keyBy('user_id');
 
-        $tim = $admin->map(function ($u) use ($statusPerUser) {
-            $s = $statusPerUser->get($u->id);
+        // Admin yang belum pernah mengisi status tetap tampil, dianggap "Tersedia"
+        $allStatuses = $admin->map(function ($u) use ($tercatat) {
+            $status = $tercatat->get($u->id) ?? (new AdminStatus())->forceFill([
+                'user_id'             => $u->id,
+                'status_ketersediaan' => 'TERSEDIA',
+                'deskripsi_pekerjaan' => null,
+            ]);
 
-            return [
-                'id'         => $u->id,
-                'nama'       => $u->karyawan?->nama ?? $u->name,
-                'unit'       => $u->karyawan?->unit?->nama_unit,
-                'peran'      => $u->peran?->nama_peran,
-                'status'     => $s?->status_ketersediaan ?? 'TERSEDIA',
-                'deskripsi'  => $s?->deskripsi_pekerjaan,
-                'diperbarui' => $s?->updated_at,
-            ];
+            return $status->setRelation('user', $u);
         });
 
-        $statusSaya = $statusPerUser->get($userId);
+        $currentStatus = $allStatuses->firstWhere('user_id', $userId)
+            ?? (new AdminStatus())->forceFill([
+                'user_id'             => $userId,
+                'status_ketersediaan' => 'TERSEDIA',
+                'deskripsi_pekerjaan' => null,
+            ]);
 
-        $ringkasan = collect(self::STATUS)->map(fn ($label, $kode) => $tim->where('status', $kode)->count());
-
-        return view('admin.status-ketersediaan', [
-            'tim'        => $tim,
-            'statusSaya' => $statusSaya?->status_ketersediaan ?? 'TERSEDIA',
-            'deskripsi'  => $statusSaya?->deskripsi_pekerjaan,
-            'pilihan'    => self::STATUS,
-            'ringkasan'  => $ringkasan,
-            'userId'     => $userId,
-        ]);
+        return view('admin.status.index', compact('currentStatus', 'allStatuses'));
     }
 
     /**
@@ -69,7 +60,7 @@ class AdminStatusController extends Controller
     public function update(Request $request)
     {
         $data = $request->validate([
-            'status_ketersediaan' => ['required', Rule::in(array_keys(self::STATUS))],
+            'status_ketersediaan' => ['required', Rule::in(self::STATUS)],
             'deskripsi_pekerjaan' => ['nullable', 'string', 'max:255'],
         ], [
             'status_ketersediaan.required' => 'Pilih status ketersediaan.',
