@@ -2,107 +2,92 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Aset;
-use App\Models\Ruangan;
-use App\Models\Peminjaman;
-use App\Models\DukunganKegiatan;
-use App\Models\PengingatKalender; // Tambahkan model ini
 use App\Models\AdminStatus;
-use Carbon\Carbon;
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\Rule;
 
-class AdminDashboardController extends Controller
+class AdminStatusController extends Controller
 {
+    /** Pilihan status (sesuai enum di tabel admin_statuses). */
+    public const STATUS = [
+        'TERSEDIA'   => 'Tersedia',
+        'SIBUK'      => 'Sibuk',
+        'TUGAS_LUAR' => 'Tugas Luar',
+    ];
+
+    /**
+     * Halaman status ketersediaan: status milik sendiri + status seluruh tim Humas.
+     */
     public function index()
     {
-        $sekarang = now()->toDateTimeString();
+        $userId = Auth::id();
 
-        // Peminjaman yang masih aktif (belum dikembalikan)
-        $aktif = fn () => Peminjaman::where('status', 'DISETUJUI')
-            ->where(function ($q) {
-                $q->whereNull('status_pengembalian')
-                  ->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
-            });
+        // Semua akun Super Admin & Admin (tim Humas)
+        $admin = User::with(['karyawan.unit', 'peran'])
+            ->whereHas('peran', fn ($q) => $q->whereIn('kode_peran', ['SUPER_ADMIN', 'ADMIN']))
+            ->orderBy('name')
+            ->get();
 
-        /* ---------- Antrean tindakan ---------- */
-        $antreanPeminjaman = Peminjaman::with(['user.karyawan.unit', 'aset', 'ruangan'])
-            ->where('status', 'PENDING')
-            ->orderBy('tanggal_mulai')->orderBy('jam_mulai')
-            ->limit(8)->get();
-
-        $statusDukunganSelesai = ['DIIDELEGASIKAN', 'DIPROSES', 'SELESAI', 'DITOLAK'];
-        $antreanDukungan = DukunganKegiatan::with('user')
-            ->whereNotIn('status', $statusDukunganSelesai)
-            ->orderBy('tanggal_pelaksanaan')
-            ->limit(8)->get();
-
-        $totalPeminjamanMenunggu = Peminjaman::where('status', 'PENDING')->count();
-        $totalDukunganMenunggu   = DukunganKegiatan::whereNotIn('status', $statusDukunganSelesai)->count();
-
-        /* ---------- Pengembalian terlambat / jatuh tempo ---------- */
-        $terlambat = $aktif()->with(['user.karyawan.unit', 'aset', 'ruangan'])
-            ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) < ?', [$sekarang])
-            ->orderBy('tanggal_selesai')->limit(6)->get();
-
-        $jatuhTempo = $aktif()->with(['user.karyawan.unit', 'aset', 'ruangan'])
-            ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) >= ?', [$sekarang])
-            ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) <= ?', [now()->addDay()->toDateTimeString()])
-            ->orderBy('tanggal_selesai')->limit(6)->get();
-
-        /* ---------- Kalender event (Gabungan Dukungan Kegiatan & Pengingat Mandiri) ---------- */
-        $eventDukungan = DukunganKegiatan::with('user')
-            ->whereBetween('tanggal_pelaksanaan', [now()->subMonths(3)->toDateString(), now()->addMonths(9)->toDateString()])
+        // Status yang sudah tercatat, dikelompokkan per user
+        $statusPerUser = AdminStatus::whereIn('user_id', $admin->pluck('id'))
             ->get()
-            ->map(fn ($e) => [
-                'id'       => 'dukungan-' . $e->id,
-                'nama'     => $e->nama_event,
-                'tanggal'  => Carbon::parse($e->tanggal_pelaksanaan)->format('Y-m-d'),
-                'warna'    => strtolower($e->kategori_warna ?? 'hijau'),
-                'status'   => $e->status,
-                'pemohon'  => $e->user?->name ?? '-',
-                'lokasi'   => $e->lokasi ?? null,
-            ]);
+            ->keyBy('user_id');
 
-        $eventPengingat = PengingatKalender::all()
-            ->map(fn ($p) => [
-                'id'       => 'pengingat-' . $p->id,
-                'nama'     => $p->judul,
-                'tanggal'  => Carbon::parse($p->tanggal)->format('Y-m-d'),
-                'warna'    => ltrim($p->warna, '#') === '6EAE78' ? 'hijau' : 'biru', // Menyesuaikan representasi warna
-                'status'   => 'PENGINGAT',
-                'pemohon'  => $p->pembuat?->name ?? 'Admin',
-                'lokasi'   => $p->keterangan ?? null,
-            ]);
+        $tim = $admin->map(function ($u) use ($statusPerUser) {
+            $s = $statusPerUser->get($u->id);
 
-        $kalenderEvent = $eventDukungan->concat($eventPengingat)->sortBy('tanggal')->values();
+            return [
+                'id'         => $u->id,
+                'nama'       => $u->karyawan?->nama ?? $u->name,
+                'unit'       => $u->karyawan?->unit?->nama_unit,
+                'peran'      => $u->peran?->nama_peran,
+                'status'     => $s?->status_ketersediaan ?? 'TERSEDIA',
+                'deskripsi'  => $s?->deskripsi_pekerjaan,
+                'diperbarui' => $s?->updated_at,
+            ];
+        });
 
-        $eventMingguIni = $kalenderEvent
-            ->filter(fn ($e) => $e['tanggal'] >= now()->toDateString() && $e['tanggal'] <= now()->addDays(7)->toDateString())
-            ->count();
+        $statusSaya = $statusPerUser->get($userId);
 
-        /* ---------- Ketersediaan tim ---------- */
-        $timStatus = AdminStatus::with('user.karyawan.unit')->get();
-        $timTersedia = $timStatus->where('status_ketersediaan', 'TERSEDIA')->count();
+        $ringkasan = collect(self::STATUS)->map(fn ($label, $kode) => $tim->where('status', $kode)->count());
 
-        /* ---------- Ringkasan aset & ruangan ---------- */
-        $ringkasan = [
-            'aset_total'      => Aset::count(),
-            'aset_perbaikan'  => Aset::where('status', 'PERBAIKAN')->count(),
-            'aset_rusak'      => Aset::where('kondisi', 'RUSAK_BERAT')->count(),
-            'ruangan_total'   => Ruangan::count(),
-            'ruangan_dipakai' => $aktif()->whereNotNull('ruangan_id')
-                ->whereRaw('TIMESTAMP(tanggal_mulai, jam_mulai) <= ?', [$sekarang])
-                ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) >= ?', [$sekarang])
-                ->count(),
-            'aset_dipinjam'   => (int) $aktif()->whereNotNull('aset_id')->sum('jumlah'),
-        ];
+        return view('admin.status-ketersediaan', [
+            'tim'        => $tim,
+            'statusSaya' => $statusSaya?->status_ketersediaan ?? 'TERSEDIA',
+            'deskripsi'  => $statusSaya?->deskripsi_pekerjaan,
+            'pilihan'    => self::STATUS,
+            'ringkasan'  => $ringkasan,
+            'userId'     => $userId,
+        ]);
+    }
 
-        return view('admin.dashboard', compact(
-            'antreanPeminjaman', 'antreanDukungan',
-            'totalPeminjamanMenunggu', 'totalDukunganMenunggu',
-            'terlambat', 'jatuhTempo',
-            'kalenderEvent', 'eventMingguIni',
-            'timStatus', 'timTersedia',
-            'ringkasan'
-        ));
+    /**
+     * Simpan status milik user yang sedang login.
+     */
+    public function update(Request $request)
+    {
+        $data = $request->validate([
+            'status_ketersediaan' => ['required', Rule::in(array_keys(self::STATUS))],
+            'deskripsi_pekerjaan' => ['nullable', 'string', 'max:255'],
+        ], [
+            'status_ketersediaan.required' => 'Pilih status ketersediaan.',
+            'status_ketersediaan.in'       => 'Status tidak valid.',
+            'deskripsi_pekerjaan.max'      => 'Keterangan maksimal 255 karakter.',
+        ]);
+
+        $userId = Auth::id();
+
+        $status = AdminStatus::where('user_id', $userId)->first() ?? new AdminStatus();
+        $status->forceFill([
+            'user_id'             => $userId,
+            'status_ketersediaan' => $data['status_ketersediaan'],
+            'deskripsi_pekerjaan' => $data['deskripsi_pekerjaan'] ?? null,
+        ])->save();
+
+        return redirect()
+            ->route('admin.status.index')
+            ->with('success', 'Status ketersediaan berhasil diperbarui.');
     }
 }
