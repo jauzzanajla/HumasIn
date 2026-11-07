@@ -1,16 +1,9 @@
 <?php
 
-// Tangkap request dan arahkan langsung ke core Laravel di folder public
-$_SERVER['SCRIPT_NAME'] = '/index.php';
+// Teruskan semua request dari Vercel ke Laravel (public/index.php).
+// File statis (build, css, js, images) sudah diatur oleh "routes" di vercel.json.
 
-$uri = urldecode(
-    parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH)
-);
+$_SERVER['SCRIPT_NAME']     = '/index.php';
+$_SERVER['SCRIPT_FILENAME'] = __DIR__ . '/../public/index.php';
 
-// Jika mengakses file fisik publik (seperti css, js, gambar), biarkan lewat
-if ($uri !== '/' && file_exists(__DIR__ . '/../public' . $uri)) {
-    return false;
-}
-
-// Jalankan entry point utama Laravel
-require_once __DIR__ . '/../public/index.php';
+require __DIR__ . '/../public/index.php';
