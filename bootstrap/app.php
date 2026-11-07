@@ -1,21 +1,30 @@
 <?php
 
 use Illuminate\Foundation\Application;
-use Illuminate\Http\Request;
+use Illuminate\Foundation\Configuration\Exceptions;
+use Illuminate\Foundation\Configuration\Middleware;
+use App\Http\Middleware\RoleMiddleware;
 
-define('LARAVEL_START', microtime(true));
+$app = Application::configure(basePath: dirname(__DIR__))
+    ->withRouting(
+        web: __DIR__.'/../routes/web.php',
+        commands: __DIR__.'/../routes/console.php',
+        health: '/up',
+    )
+    ->withMiddleware(function (Middleware $middleware) {
+        $middleware->alias([
+            'role' => RoleMiddleware::class,
+        ]);
+        $middleware->trustProxies(at: '*');
+    })
+    ->withExceptions(function (Exceptions $exceptions) {
+        //
+    })
+    ->create();
 
-if (file_exists($maintenance = __DIR__.'/../storage/framework/maintenance.php')) {
-    require $maintenance;
-}
-
-require __DIR__.'/../vendor/autoload.php';
-
-$app = require_once __DIR__.'/../bootstrap/app.php';
-
-// Pastikan storage path mengarah ke /tmp di Vercel
+// Arahkan storage ke /tmp khusus untuk lingkungan Vercel serverless
 if (isset($_ENV['VERCEL']) || getenv('VERCEL')) {
     $app->useStoragePath('/tmp/storage');
 }
 
-$app->handleRequest(Request::capture());
+return $app;
