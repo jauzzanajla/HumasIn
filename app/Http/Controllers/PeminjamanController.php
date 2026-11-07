@@ -16,32 +16,48 @@ class PeminjamanController extends Controller
 {
     /*
     |--------------------------------------------------------------------------
+    | HELPER SQL (jalan di MySQL lokal & PostgreSQL Supabase)
+    |--------------------------------------------------------------------------
+    */
+
+    /** Gabungan kolom tanggal + jam, contoh hasil: "2026-11-08 09:30:00". */
+    private const MULAI   = "CONCAT(tanggal_mulai, ' ', jam_mulai)";
+    private const SELESAI = "CONCAT(tanggal_selesai, ' ', jam_selesai)";
+
+    /** Samakan format waktu pembanding menjadi "Y-m-d H:i:s" supaya perbandingannya tepat. */
+    private function waktu($nilai): string
+    {
+        return Carbon::parse($nilai)->format('Y-m-d H:i:s');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | KATALOG DAN KELOLA PINJAMAN
     |--------------------------------------------------------------------------
     */
 
-     public function index()
-   {
-       $jadwalRuangan = $this->jadwalRuangan();
+    public function index()
+    {
+        $jadwalRuangan = $this->jadwalRuangan();
 
-       return view('peminjaman.index', compact('jadwalRuangan'));
-   }
+        return view('peminjaman.index', compact('jadwalRuangan'));
+    }
 
-   private function jadwalRuangan()
-   {
-       return Peminjaman::with('ruangan')
-           ->whereNotNull('ruangan_id')
-           ->whereIn('status', ['PENDING', 'DISETUJUI'])
-           ->where(function ($q) {
-               $q->whereNull('status_pengembalian')
-                   ->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
-           })
-           ->whereRaw('TIMESTAMP(tanggal_mulai, jam_mulai) < ?', [now()->addMonth()->toDateTimeString()])
-           ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) > ?', [now()->toDateTimeString()])
-           ->orderBy('tanggal_mulai')
-           ->orderBy('jam_mulai')
-           ->get();
-   }
+    private function jadwalRuangan()
+    {
+        return Peminjaman::with('ruangan')
+            ->whereNotNull('ruangan_id')
+            ->whereIn('status', ['PENDING', 'DISETUJUI'])
+            ->where(function ($q) {
+                $q->whereNull('status_pengembalian')
+                    ->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
+            })
+            ->whereRaw(self::MULAI . ' < ?', [$this->waktu(now()->addMonth())])
+            ->whereRaw(self::SELESAI . ' > ?', [$this->waktu(now())])
+            ->orderBy('tanggal_mulai')
+            ->orderBy('jam_mulai')
+            ->get();
+    }
 
     public function kelola(Request $request)
     {
@@ -98,19 +114,21 @@ class PeminjamanController extends Controller
     | KATALOG ASET
     |--------------------------------------------------------------------------
     */
-public function aset(Request $request)
+
+    public function aset(Request $request)
     {
         $jadwal = $this->jadwalDariRequest($request);
-        $search = $request->query('search'); // Ambil kata kunci pencarian
+        $search = $request->query('search');
 
         $query = Aset::where('status', 'TERSEDIA')
             ->where('jumlah', '>', 0);
 
-        // Jika user mengetik pencarian
+        // Pencarian tidak membedakan huruf besar/kecil (PostgreSQL membedakannya kalau pakai LIKE biasa)
         if ($search) {
-            $query->where(function ($q) use ($search) {
-                $q->where('nama_aset', 'like', "%{$search}%")
-                  ->orWhere('deskripsi', 'like', "%{$search}%");
+            $kata = '%' . mb_strtolower($search) . '%';
+            $query->where(function ($q) use ($kata) {
+                $q->whereRaw('LOWER(nama_aset) LIKE ?', [$kata])
+                  ->orWhereRaw('LOWER(deskripsi) LIKE ?', [$kata]);
             });
         }
 
@@ -169,7 +187,6 @@ public function aset(Request $request)
                 ]);
             }
 
-            // ✅ TAMBAHKAN PEMANGGILAN INI DI SINI
             $this->assertAssetStock(
                 $aset,
                 $validated['tanggal_mulai'],
@@ -199,7 +216,8 @@ public function aset(Request $request)
         Notifikasi::kirimKeAdmin(
             'Pengajuan peminjaman aset baru',
             Auth::user()->name . ' mengajukan peminjaman ' . $namaAset . ' (' . $validated['jumlah_pinjam'] . ' unit).',
-            route('admin.dashboard'), 'info'
+            route('admin.dashboard'),
+            'info'
         );
 
         return redirect()
@@ -295,11 +313,12 @@ public function aset(Request $request)
         }, 3);
 
         $namaRuangan = Ruangan::find($id)?->nama_ruangan ?? 'ruangan';
-Notifikasi::kirimKeAdmin(
-    'Pengajuan peminjaman ruangan baru',
-    Auth::user()->name . ' mengajukan peminjaman ' . $namaRuangan . '.',
-    route('admin.dashboard'), 'info'
-);
+        Notifikasi::kirimKeAdmin(
+            'Pengajuan peminjaman ruangan baru',
+            Auth::user()->name . ' mengajukan peminjaman ' . $namaRuangan . '.',
+            route('admin.dashboard'),
+            'info'
+        );
 
         return redirect()
             ->route('peminjaman.ruangan')
@@ -308,7 +327,7 @@ Notifikasi::kirimKeAdmin(
 
     /*
     |--------------------------------------------------------------------------
-    | SETUJUI ATAU TOLAK PENGAJUAN (HANYA SATU KALI DEKLARASI)
+    | SETUJUI ATAU TOLAK PENGAJUAN
     |--------------------------------------------------------------------------
     */
 
@@ -382,26 +401,23 @@ Notifikasi::kirimKeAdmin(
                 'alasan_penolakan' => $validated['status'] === 'DITOLAK' ? $validated['alasan_penolakan'] : null,
             ]);
 
-
             return $validated['status'] === 'DISETUJUI'
                 ? 'Pengajuan peminjaman berhasil disetujui.'
                 : 'Pengajuan peminjaman berhasil ditolak.';
         }, 3);
 
         $p = Peminjaman::with(['aset', 'ruangan'])->find($id);
-$nama = $p?->aset?->nama_aset ?? $p?->ruangan?->nama_ruangan ?? 'peminjaman';
+        $nama = $p?->aset?->nama_aset ?? $p?->ruangan?->nama_ruangan ?? 'peminjaman';
 
-if ($validated['status'] === 'DISETUJUI') {
-    Notifikasi::kirim($p->user_id, 'Peminjaman disetujui', "Pengajuan peminjaman {$nama} Anda telah disetujui.", route('peminjaman.kelola', ['tab' => 'dipinjam']), 'sukses');
-} else {
-    Notifikasi::kirim($p->user_id, 'Peminjaman ditolak', "Pengajuan {$nama} ditolak. Alasan: " . $validated['alasan_penolakan'], route('peminjaman.kelola', ['tab' => 'ditolak']), 'tolak');
-}
+        if ($validated['status'] === 'DISETUJUI') {
+            Notifikasi::kirim($p->user_id, 'Peminjaman disetujui', "Pengajuan peminjaman {$nama} Anda telah disetujui.", route('peminjaman.kelola', ['tab' => 'dipinjam']), 'sukses');
+        } else {
+            Notifikasi::kirim($p->user_id, 'Peminjaman ditolak', "Pengajuan {$nama} ditolak. Alasan: " . $validated['alasan_penolakan'], route('peminjaman.kelola', ['tab' => 'ditolak']), 'tolak');
+        }
 
         return redirect()
             ->route('peminjaman.kelola', [
-                'tab' => $validated['status'] === 'DISETUJUI'
-                    ? 'dipinjam'
-                    : 'ditolak',
+                'tab' => $validated['status'] === 'DISETUJUI' ? 'dipinjam' : 'ditolak',
             ])
             ->with('success', $pesan);
     }
@@ -436,9 +452,16 @@ if ($validated['status'] === 'DISETUJUI') {
                 'status_pengembalian' => 'DIKEMBALIKAN',
             ]);
         }, 3);
+
         $p = Peminjaman::with(['aset', 'ruangan'])->find($id);
 
-Notifikasi::kirim($p->user_id, 'Pengembalian dicatat', 'Pengembalian ' . ($p->aset?->nama_aset ?? $p->ruangan?->nama_ruangan) . ' telah dicatat. Terima kasih.', route('peminjaman.kelola', ['tab' => 'dikembalikan']), 'sukses');
+        Notifikasi::kirim(
+            $p->user_id,
+            'Pengembalian dicatat',
+            'Pengembalian ' . ($p->aset?->nama_aset ?? $p->ruangan?->nama_ruangan) . ' telah dicatat. Terima kasih.',
+            route('peminjaman.kelola', ['tab' => 'dikembalikan']),
+            'sukses'
+        );
 
         return redirect()
             ->route('peminjaman.kelola', ['tab' => 'dikembalikan'])
@@ -459,51 +482,49 @@ Notifikasi::kirim($p->user_id, 'Pengembalian dicatat', 'Pengembalian ' . ($p->as
         $jamSelesai = $request->query('jam_selesai');
 
         if ($tanggalMulai && $jamMulai && $tanggalSelesai && $jamSelesai) {
-            return [
-                "{$tanggalMulai} {$jamMulai}",
-                "{$tanggalSelesai} {$jamSelesai}",
-            ];
+            try {
+                return [
+                    $this->waktu("{$tanggalMulai} {$jamMulai}"),
+                    $this->waktu("{$tanggalSelesai} {$jamSelesai}"),
+                ];
+            } catch (\Throwable $e) {
+                return null; // format tanggal/jam di URL tidak valid -> abaikan filter
+            }
         }
 
         return null;
     }
 
-  private function queryAktif(
-    string $kolom,
-    int $id,
-    ?array $jadwal = null,
-    ?int $excludeId = null
-) {
-    $query = Peminjaman::where($kolom, $id)
-        ->whereIn('status', ['PENDING', 'DISETUJUI'])
-        ->where(function ($q) {
-            $q->whereNull('status_pengembalian')
-                ->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
-        });
+    private function queryAktif(
+        string $kolom,
+        int $id,
+        ?array $jadwal = null,
+        ?int $excludeId = null
+    ) {
+        $query = Peminjaman::where($kolom, $id)
+            ->whereIn('status', ['PENDING', 'DISETUJUI'])
+            ->where(function ($q) {
+                $q->whereNull('status_pengembalian')
+                    ->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
+            });
 
-    if ($jadwal) {
-        [$mulai, $selesai] = $jadwal;
+        if ($jadwal) {
+            [$mulai, $selesai] = $jadwal;
 
-        $query->whereRaw(
-            'TIMESTAMP(tanggal_mulai, jam_mulai) < ?',
-            [$selesai]
-        )->whereRaw(
-            'TIMESTAMP(tanggal_selesai, jam_selesai) > ?',
-            [$mulai]
-        );
-    } else {
-        $query->whereRaw(
-            'TIMESTAMP(tanggal_selesai, jam_selesai) > ?',
-            [now()->toDateTimeString()]
-        );
+            // Bentrok jika: mulai_lama < selesai_baru DAN selesai_lama > mulai_baru
+            $query->whereRaw(self::MULAI . ' < ?', [$this->waktu($selesai)])
+                  ->whereRaw(self::SELESAI . ' > ?', [$this->waktu($mulai)]);
+        } else {
+            $query->whereRaw(self::SELESAI . ' > ?', [$this->waktu(now())]);
+        }
+
+        if ($excludeId !== null) {
+            $query->where('id', '!=', $excludeId);
+        }
+
+        return $query;
     }
 
-    if ($excludeId !== null) {
-        $query->where('id', '!=', $excludeId);
-    }
-
-    return $query;
-}
     private function assertAssetStock(
         Aset $aset,
         string $tanggalMulai,
@@ -516,7 +537,7 @@ Notifikasi::kirim($p->user_id, 'Pengembalian dicatat', 'Pengembalian ' . ($p->as
         $stokTerpakai = (int) $this->queryAktif(
             'aset_id',
             $aset->id,
-            ["{$tanggalMulai} {$jamMulai}", "{$tanggalSelesai} {$jamSelesai}"],
+            [$this->gabung($tanggalMulai, $jamMulai), $this->gabung($tanggalSelesai, $jamSelesai)],
             $excludeId
         )->sum('jumlah');
 
@@ -543,7 +564,7 @@ Notifikasi::kirim($p->user_id, 'Pengembalian dicatat', 'Pengembalian ' . ($p->as
         $bentrok = $this->queryAktif(
             'ruangan_id',
             $ruangan->id,
-            ["{$tanggalMulai} {$jamMulai}", "{$tanggalSelesai} {$jamSelesai}"],
+            [$this->gabung($tanggalMulai, $jamMulai), $this->gabung($tanggalSelesai, $jamSelesai)],
             $excludeId
         )->exists();
 
@@ -555,15 +576,19 @@ Notifikasi::kirim($p->user_id, 'Pengembalian dicatat', 'Pengembalian ' . ($p->as
         }
     }
 
+    /**
+     * Gabungkan tanggal + jam menjadi "Y-m-d H:i:s".
+     * Aman walau tanggal dari database berbentuk "2026-11-08 00:00:00" (cast date).
+     */
+    private function gabung(string $tanggal, string $jam): string
+    {
+        return Carbon::parse($tanggal)->format('Y-m-d') . ' ' . Carbon::parse($jam)->format('H:i:s');
+    }
+
     private function validatePeriod(array $data): void
     {
-        $mulai = strtotime(
-            $data['tanggal_mulai'] . ' ' . $data['jam_mulai']
-        );
-
-        $selesai = strtotime(
-            $data['tanggal_selesai'] . ' ' . $data['jam_selesai']
-        );
+        $mulai = strtotime($data['tanggal_mulai'] . ' ' . $data['jam_mulai']);
+        $selesai = strtotime($data['tanggal_selesai'] . ' ' . $data['jam_selesai']);
 
         if ($selesai <= $mulai) {
             throw ValidationException::withMessages([
@@ -578,58 +603,58 @@ Notifikasi::kirim($p->user_id, 'Pengembalian dicatat', 'Pengembalian ' . ($p->as
         $user?->loadMissing('peran');
 
         abort_unless(
-            in_array(
-                $user?->peran?->kode_peran,
-                ['SUPER_ADMIN', 'ADMIN'],
-                true
-            ),
+            in_array($user?->peran?->kode_peran, ['SUPER_ADMIN', 'ADMIN'], true),
             403,
             'Anda tidak memiliki akses ke halaman ini.'
         );
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | JSON KALENDER RUANGAN
+    |--------------------------------------------------------------------------
+    */
 
+    public function jadwalKalenderJson(Request $request)
+    {
+        try {
+            $bulan = Carbon::createFromFormat('Y-m', $request->get('bulan', now()->format('Y-m')))->startOfMonth();
+        } catch (\Throwable $e) {
+            $bulan = now()->startOfMonth();
+        }
 
-public function jadwalKalenderJson(Request $request)
-{
-    try {
-        $bulan = Carbon::createFromFormat('Y-m', $request->get('bulan', now()->format('Y-m')))->startOfMonth();
-    } catch (\Throwable $e) {
-        $bulan = now()->startOfMonth();
+        $awal  = $bulan->copy()->startOfWeek()->toDateTimeString();
+        $akhir = $bulan->copy()->endOfMonth()->endOfWeek()->toDateTimeString();
+
+        $data = Peminjaman::with(['ruangan', 'user.karyawan.unit'])
+            ->whereNotNull('ruangan_id')
+            ->whereIn('status', ['PENDING', 'DISETUJUI'])
+            ->where(function ($q) {
+                $q->whereNull('status_pengembalian')
+                    ->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
+            })
+            ->whereRaw(self::MULAI . ' <= ?', [$akhir])
+            ->whereRaw(self::SELESAI . ' >= ?', [$awal])
+            ->orderBy('tanggal_mulai')
+            ->orderBy('jam_mulai')
+            ->get();
+
+        return response()->json([
+            'events' => $data->map(function ($p) {
+                $tglMulai   = Carbon::parse($p->tanggal_mulai)->format('Y-m-d');
+                $tglSelesai = Carbon::parse($p->tanggal_selesai)->format('Y-m-d');
+
+                return [
+                    'id'       => $p->id,
+                    'ruangan'  => $p->ruangan?->nama_ruangan ?? '-',
+                    'judul'    => $p->keperluan ?? 'Peminjaman ruangan',
+                    'peminjam' => $p->user?->karyawan?->nama ?? $p->user?->name ?? '-',
+                    'unit'     => $p->user?->karyawan?->unit?->nama_unit ?? '-',
+                    'mulai'    => $tglMulai . 'T' . substr($p->jam_mulai, 0, 5),
+                    'selesai'  => $tglSelesai . 'T' . substr($p->jam_selesai, 0, 5),
+                    'status'   => $p->status,
+                ];
+            })->values(),
+        ]);
     }
-
-    $awal  = $bulan->copy()->startOfWeek()->toDateTimeString();
-    $akhir = $bulan->copy()->endOfMonth()->endOfWeek()->toDateTimeString();
-
-    $data = Peminjaman::with(['ruangan', 'user.karyawan.unit'])
-        ->whereNotNull('ruangan_id')
-        ->whereIn('status', ['PENDING', 'DISETUJUI'])
-        ->where(function ($q) {
-            $q->whereNull('status_pengembalian')
-                ->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
-        })
-        ->whereRaw('TIMESTAMP(tanggal_mulai, jam_mulai) <= ?', [$akhir])
-        ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) >= ?', [$awal])
-        ->orderBy('tanggal_mulai')
-        ->orderBy('jam_mulai')
-        ->get();
-
-    return response()->json([
-        'events' => $data->map(function ($p) {
-            $tglMulai   = Carbon::parse($p->tanggal_mulai)->format('Y-m-d');
-            $tglSelesai = Carbon::parse($p->tanggal_selesai)->format('Y-m-d');
-
-            return [
-                'id'       => $p->id,
-                'ruangan'  => $p->ruangan?->nama_ruangan ?? '-',
-                'judul'    => $p->keperluan ?? 'Peminjaman ruangan',
-                'peminjam' => $p->user?->karyawan?->nama ?? $p->user?->name ?? '-',
-                'unit'     => $p->user?->karyawan?->unit?->nama_unit ?? '-',
-                'mulai'    => $tglMulai . 'T' . substr($p->jam_mulai, 0, 5),
-                'selesai'  => $tglSelesai . 'T' . substr($p->jam_selesai, 0, 5),
-                'status'   => $p->status,
-            ];
-        })->values(),
-    ]);
-}
 }
