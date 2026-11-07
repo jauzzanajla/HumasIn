@@ -43,21 +43,24 @@ class PeminjamanController extends Controller
         return view('peminjaman.index', compact('jadwalRuangan'));
     }
 
-    private function jadwalRuangan()
-    {
-        return Peminjaman::with('ruangan')
-            ->whereNotNull('ruangan_id')
-            ->whereIn('status', ['PENDING', 'DISETUJUI'])
-            ->where(function ($q) {
-                $q->whereNull('status_pengembalian')
-                    ->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
-            })
-            ->whereRaw(self::MULAI . ' < ?', [$this->waktu(now()->addMonth())])
-            ->whereRaw(self::SELESAI . ' > ?', [$this->waktu(now())])
-            ->orderBy('tanggal_mulai')
-            ->orderBy('jam_mulai')
-            ->get();
-    }
+   private function jadwalRuangan()
+{
+    $awal  = $this->waktu(now());
+    $akhir = $this->waktu(now()->addDays(30));
+
+    return Peminjaman::with('ruangan')
+        ->whereNotNull('ruangan_id')
+        ->whereIn('status', ['PENDING', 'DISETUJUI'])
+        ->where(function ($q) {
+            $q->whereNull('status_pengembalian')
+                ->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
+        })
+        ->whereRaw(self::MULAI . ' < ?', [$akhir])
+        ->whereRaw(self::SELESAI . ' > ?', [$awal])
+        ->orderBy('tanggal_mulai')
+        ->orderBy('jam_mulai')
+        ->get();
+}
 
     public function kelola(Request $request)
     {
