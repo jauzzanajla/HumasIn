@@ -3,14 +3,8 @@
   "framework": null,
   "functions": {
     "api/index.php": {
-      "runtime": "vercel-php@0.7.2",
-      "maxDuration": 60
+      "runtime": "vercel-php@0.7.2"
     }
-  },
-  "env": {
-    "APP_ENV": "production",
-    "APP_DEBUG": "true",
-    "APP_STORAGE": "/tmp"
   },
   "routes": [
     {
