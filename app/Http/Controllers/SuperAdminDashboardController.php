@@ -9,7 +9,7 @@ use App\Models\Peran;
 use App\Models\Ruangan;
 use App\Models\User;
 use App\Models\DukunganKegiatan;
-use App\Models\PengingatKalender; // Tambahkan model ini
+use App\Models\PengingatKalender;
 use Carbon\Carbon;
 
 class SuperAdminDashboardController extends Controller
@@ -66,11 +66,13 @@ class SuperAdminDashboardController extends Controller
         $menggantung = Peminjaman::where('status', 'PENDING')
             ->where('created_at', '<', now()->subDays(3))->count();
         $asetRusak = Aset::where('kondisi', 'RUSAK_BERAT')->count();
+
+        // CONCAT(tanggal, ' ', jam) jalan di MySQL (laptop) dan PostgreSQL (Supabase)
         $terlambat = Peminjaman::where('status', 'DISETUJUI')
             ->where(function ($q) {
                 $q->whereNull('status_pengembalian')->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
             })
-            ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) < ?', [now()->toDateTimeString()])
+            ->whereRaw("CONCAT(tanggal_selesai, ' ', jam_selesai) < ?", [now()->toDateTimeString()])
             ->count();
 
         $peringatan = collect([
@@ -81,7 +83,7 @@ class SuperAdminDashboardController extends Controller
             ['teks' => "$akunTanpaRole akun belum punya role", 'jumlah' => $akunTanpaRole, 'url' => route('users.index'), 'level' => 'amber'],
         ])->filter(fn ($p) => $p['jumlah'] > 0)->values();
 
-        /* ---------- Aktivitas terbaru (Termasuk Pengingat Kalender) ---------- */
+        /* ---------- Aktivitas terbaru (termasuk pengingat kalender) ---------- */
         $aktivitas = collect();
 
         Peminjaman::with(['user.karyawan', 'aset', 'ruangan'])->latest()->limit(8)->get()
