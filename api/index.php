@@ -1,5 +1,20 @@
 <?php
 
+// ===== Paksa semua cache Laravel ke /tmp (satu-satunya folder yang bisa ditulisi di Vercel) =====
+$jalurCache = [
+    'APP_PACKAGES_CACHE' => '/tmp/packages.php',
+    'APP_SERVICES_CACHE' => '/tmp/services.php',
+    'APP_CONFIG_CACHE'   => '/tmp/config.php',
+    'APP_ROUTES_CACHE'   => '/tmp/routes.php',
+    'APP_EVENTS_CACHE'   => '/tmp/events.php',
+    'VIEW_COMPILED_PATH' => '/tmp',
+];
+foreach ($jalurCache as $kunci => $nilai) {
+    putenv("$kunci=$nilai");
+    $_ENV[$kunci]    = $nilai;
+    $_SERVER[$kunci] = $nilai;
+}
+
 // ===== DIAGNOSA SEMENTARA: buka /?cek-boot=1 =====
 if (isset($_GET['cek-boot'])) {
     header('Content-Type: text/plain; charset=utf-8');
@@ -18,7 +33,7 @@ if (isset($_GET['cek-boot'])) {
         echo "BOOT BERHASIL\n";
         echo "view tersedia: " . ($app->bound('view') ? 'ya' : 'TIDAK') . "\n";
 
-        DB::connection()->getPdo();
+        \Illuminate\Support\Facades\DB::connection()->getPdo();
         echo "Database: TERHUBUNG\n";
     } catch (\Throwable $e) {
         echo "=== ERROR ===\n";
