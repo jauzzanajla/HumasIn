@@ -22,9 +22,23 @@ $app = Application::configure(basePath: dirname(__DIR__))
     })
     ->create();
 
-// Arahkan storage ke /tmp khusus untuk lingkungan Vercel serverless
+// Arahkan storage ke /tmp dan buat foldernya secara otomatis jika di Vercel
 if (isset($_ENV['VERCEL']) || getenv('VERCEL')) {
-    $app->useStoragePath('/tmp/storage');
+    $storagePath = '/tmp/storage';
+    $app->useStoragePath($storagePath);
+
+    foreach ([
+        '',
+        '/framework',
+        '/framework/views',
+        '/framework/cache',
+        '/framework/sessions',
+        '/logs',
+    ] as $folder) {
+        if (!is_dir($storagePath . $folder)) {
+            mkdir($storagePath . $folder, 0755, true);
+        }
+    }
 }
 
 return $app;
