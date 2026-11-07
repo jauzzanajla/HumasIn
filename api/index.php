@@ -8,6 +8,10 @@ $jalurCache = [
     'APP_ROUTES_CACHE'   => '/tmp/routes.php',
     'APP_EVENTS_CACHE'   => '/tmp/events.php',
     'VIEW_COMPILED_PATH' => '/tmp',
+    'SESSION_DRIVER'     => 'cookie',
+    'CACHE_STORE'        => 'array',
+    'QUEUE_CONNECTION'   => 'sync',
+    'LOG_CHANNEL'        => 'stderr',
 ];
 foreach ($jalurCache as $kunci => $nilai) {
     putenv("$kunci=$nilai");
