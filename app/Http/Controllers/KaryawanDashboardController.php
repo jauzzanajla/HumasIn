@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Peminjaman;
 use App\Models\DukunganKegiatan;
-use App\Models\PengingatKalender; // Tambahkan model ini
+use App\Models\PengingatKalender;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
 
@@ -104,8 +104,8 @@ class KaryawanDashboardController extends Controller
             ->where(function ($q) {
                 $q->whereNull('status_pengembalian')->orWhere('status_pengembalian', '!=', 'DIKEMBALIKAN');
             })
-            ->whereRaw('TIMESTAMP(tanggal_mulai, jam_mulai) <= ?', [$akhir->toDateTimeString()])
-            ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) >= ?', [$awal->toDateTimeString()])
+            ->whereRaw("CONCAT(tanggal_mulai, ' ', jam_mulai) <= ?", [$akhir->toDateTimeString()])
+            ->whereRaw("CONCAT(tanggal_selesai, ' ', jam_selesai) >= ?", [$awal->toDateTimeString()])
             ->orderBy('tanggal_mulai')->orderBy('jam_mulai')
             ->get();
 

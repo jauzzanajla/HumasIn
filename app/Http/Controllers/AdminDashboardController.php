@@ -6,7 +6,7 @@ use App\Models\Aset;
 use App\Models\Ruangan;
 use App\Models\Peminjaman;
 use App\Models\DukunganKegiatan;
-use App\Models\PengingatKalender; // <-- Pastikan model ini di-import
+use App\Models\PengingatKalender;
 use App\Models\AdminStatus;
 use Carbon\Carbon;
 
@@ -40,12 +40,12 @@ class AdminDashboardController extends Controller
 
         /* ---------- Pengembalian terlambat / jatuh tempo ---------- */
         $terlambat = $aktif()->with(['user.karyawan.unit', 'aset', 'ruangan'])
-            ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) < ?', [$sekarang])
+            ->whereRaw("CONCAT(tanggal_selesai, ' ', jam_selesai) < ?", [$sekarang])
             ->orderBy('tanggal_selesai')->limit(6)->get();
 
         $jatuhTempo = $aktif()->with(['user.karyawan.unit', 'aset', 'ruangan'])
-            ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) >= ?', [$sekarang])
-            ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) <= ?', [now()->addDay()->toDateTimeString()])
+            ->whereRaw("CONCAT(tanggal_selesai, ' ', jam_selesai) >= ?", [$sekarang])
+            ->whereRaw("CONCAT(tanggal_selesai, ' ', jam_selesai) <= ?", [now()->addDay()->toDateTimeString()])
             ->orderBy('tanggal_selesai')->limit(6)->get();
 
         /* ---------- Kalender event (Gabungan Dukungan Kegiatan & Pengingat Kalender) ---------- */
@@ -91,8 +91,8 @@ class AdminDashboardController extends Controller
             'aset_rusak'      => Aset::where('kondisi', 'RUSAK_BERAT')->count(),
             'ruangan_total'   => Ruangan::count(),
             'ruangan_dipakai' => $aktif()->whereNotNull('ruangan_id')
-                ->whereRaw('TIMESTAMP(tanggal_mulai, jam_mulai) <= ?', [$sekarang])
-                ->whereRaw('TIMESTAMP(tanggal_selesai, jam_selesai) >= ?', [$sekarang])
+                ->whereRaw("CONCAT(tanggal_mulai, ' ', jam_mulai) <= ?", [$sekarang])
+                ->whereRaw("CONCAT(tanggal_selesai, ' ', jam_selesai) >= ?", [$sekarang])
                 ->count(),
             'aset_dipinjam'   => (int) $aktif()->whereNotNull('aset_id')->sum('jumlah'),
         ];
